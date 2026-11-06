@@ -11,13 +11,13 @@
 3. **สร้างตารางคำ** — 1 แถวต่อ 1 คำ มีจำนวนคำในแต่ละดาว, P(word | star) แบบ Laplace smoothing 
 4. **พิมพ์ Word Count** แยกตามดาวออก Console
 5. **Word Cloud** แสดง 1 หน้าต่าง เรียงรูปตามดาว (กรองคำทั่วไปออกเฉพาะตอนวาดภาพ)
-6. **เทรน Naive Bayes** แบ่ง train/test 80/20 (stratified) แล้วแสดง Test Accuracy และ Classification Report
+6. **แบ่ง train/test 80/20** (แยกตามดาว) แล้วสร้างตารางคำจากชุด train เท่านั้น จากนั้น **คำนวณ Naive Bayes เอง** (log prior + ผลรวม log P(word | star)) แสดง Test Accuracy และ Classification Report ที่คำนวณเองเช่นกัน ไม่ใช้ `scikit-learn`
 7. **Heat Map** ของ Confusion Matrix อีก 1 หน้าต่าง
 8. **Heat Map ของตารางคำ** P(word | star) สำหรับ 30 คำยอดนิยม อีก 1 หน้าต่าง
 
 ## ผลลัพธ์
 
-- Test Accuracy ≈ **0.51**
+- Test Accuracy ≈ **0.52**
 - คลาสไม่สมดุล (3 และ 4 ดาวรวมกันเกิน 75%) โมเดลจึงทำนาย 1 ดาวได้แย่มาก
 
 ## ไฟล์ในโปรเจกต์
@@ -36,7 +36,7 @@
 ติดตั้งไลบรารี:
 
 ```bash
-pip install pythainlp pandas scikit-learn matplotlib seaborn wordcloud
+pip install pythainlp pandas numpy matplotlib seaborn wordcloud
 ```
 
 แก้ path ของไฟล์ train (`TRAIN`) ที่ต้นไฟล์ `wongnai_nb.py` ให้ตรงกับเครื่อง แล้วรัน (ไฟล์ผลลัพธ์จะถูกบันทึกในโฟลเดอร์เดียวกับสคริปต์):
