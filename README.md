@@ -8,7 +8,7 @@
 1. **โหลดข้อมูล** `w_review_train.csv` (ไม่มี header, คั่นด้วย `;`, คอลัมน์สุดท้ายคือ rating) เข้า `df` — 40,000 รีวิว
 2. **ตัดคำไทย** ด้วย `pythainlp` (engine `newmm`) แล้วตัด stop words ออก
    (เก็บคำที่บอกอารมณ์ไว้: ไม่, มาก, น้อย, สุด, ที่สุด, เกิน, จริง, เลย)
-3. **สร้างตารางคำ** — 1 แถวต่อ 1 คำ มีจำนวนคำในแต่ละดาว, P(word | star) แบบ Laplace smoothing และ P(word)
+3. **สร้างตารางคำ** — 1 แถวต่อ 1 คำ มีจำนวนคำในแต่ละดาว, P(word | star) แบบ Laplace smoothing 
 4. **พิมพ์ Word Count** แยกตามดาวออก Console
 5. **Word Cloud** แสดง 1 หน้าต่าง เรียงรูปตามดาว (กรองคำทั่วไปออกเฉพาะตอนวาดภาพ)
 6. **เทรน Naive Bayes** แบ่ง train/test 80/20 (stratified) แล้วแสดง Test Accuracy และ Classification Report
@@ -39,13 +39,13 @@
 pip install pythainlp pandas scikit-learn matplotlib seaborn wordcloud
 ```
 
-แก้ path ของไฟล์ train (`TRAIN`) และโฟลเดอร์ผลลัพธ์ (`OUT_DIR`) ที่ต้นไฟล์ `wongnai_nb.py` ให้ตรงกับเครื่อง แล้วรัน:
+แก้ path ของไฟล์ train (`TRAIN`) ที่ต้นไฟล์ `wongnai_nb.py` ให้ตรงกับเครื่อง แล้วรัน (ไฟล์ผลลัพธ์จะถูกบันทึกในโฟลเดอร์เดียวกับสคริปต์):
 
 ```bash
 python wongnai_nb.py
 ```
 
-ใช้เวลาตัดคำประมาณ 1–2 นาที แล้วจะมี 2 หน้าต่างขึ้นมา (Word Cloud และ Confusion Matrix)
-เพิ่ม `--no-show` เพื่อบันทึกเป็นไฟล์ภาพโดยไม่เปิดหน้าต่าง
+ใช้เวลาตัดคำประมาณ 1–2 นาที แล้วจะมี 3 หน้าต่างขึ้นมา (Word Cloud, Heat Map ของตารางคำ และ Confusion Matrix)
+ถ้าไม่ต้องการเปิดหน้าต่าง ให้ตั้ง `MPLBACKEND=Agg` ก่อนรัน (บันทึกเป็นไฟล์ภาพอย่างเดียว)
 
 > หมายเหตุ: ฟอนต์ Word Cloud ใช้ `C:\Windows\Fonts\tahoma.ttf` (Windows) ถ้าใช้ระบบอื่นต้องเปลี่ยน `FONT` เป็นฟอนต์ที่รองรับภาษาไทย
