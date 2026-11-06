@@ -1,13 +1,8 @@
 """Wongnai review rating prediction with Naive Bayes (word table -> word cloud -> model -> heat map)."""
 import os
 import re
-import sys
 from multiprocessing import Pool
 
-import matplotlib
-
-if "--no-show" in sys.argv:
-    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 import pandas as pd
@@ -58,7 +53,6 @@ def main():
     table["total"] = table.sum(axis=1)
     for s in stars:  # P(word | star), Laplace smoothing
         table[f"P(word|{s})"] = (table[f"star_{s}"] + 1) / (table[f"star_{s}"].sum() + len(table))
-    table["P(word)"] = table["total"] / table["total"].sum()
     table = table.sort_values("total", ascending=False).rename_axis("word")
     table.to_csv(os.path.join(OUT_DIR, "word_table_by_star.csv"), encoding="utf-8-sig")
 
@@ -110,8 +104,7 @@ def main():
     fig2.tight_layout()
     fig2.savefig(os.path.join(OUT_DIR, "confusion_matrix.png"), dpi=110)
 
-    if "--no-show" not in sys.argv:
-        plt.show()
+    plt.show()
 
 
 if __name__ == "__main__":
