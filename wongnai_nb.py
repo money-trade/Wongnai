@@ -26,7 +26,10 @@ FONT_CANDIDATES = [r"C:\Windows\Fonts\tahoma.ttf",
 FONT = os.environ.get("WONGNAI_FONT") or next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
 FONT_PROP = font_manager.FontProperties(fname=FONT) if FONT else None
 
-USE_BIGRAMS = True  # add word pairs such as "ไม่_อร่อย" to the model features
+# model settings (chosen on the validation split)
+ALPHA = 0.5          # Laplace smoothing
+MIN_COUNT = 5        # drop features seen fewer times than this in training
+USE_BIGRAMS = True   # add word pairs such as "ไม่_อร่อย" to the model features
 
 # Stop words are removed for the word table / pictures, but sentiment-bearing ones (negation / intensity) are kept
 KEEP = {"ไม่", "มาก", "น้อย", "สุด", "ที่สุด", "เกิน", "จริง", "เลย"}
@@ -70,9 +73,9 @@ def train_nb(token_lists, labels, stars):
     total = Counter()
     for c in counts.values():
         total.update(c)
-    vocab = list(total)
+    vocab = [f for f, c in total.items() if c >= MIN_COUNT]
     m = np.array([[counts[s][w] for s in stars] for w in vocab], dtype=float)
-    log_like = np.log((m + 1) / (m.sum(axis=0) + len(vocab)))
+    log_like = np.log((m + ALPHA) / (m.sum(axis=0) + ALPHA * len(vocab)))
     return {w: i for i, w in enumerate(vocab)}, log_like
 
 
@@ -158,6 +161,7 @@ def main():
     # 5) Naive Bayes by hand: score(star) = log P(star) + sum of log P(word | star) over the review's words
     row, log_like = train_nb(list(train.feats), train.rating.values, stars)
     log_prior = np.log([(train.rating == s).mean() for s in stars])
+    print(f"\nModel features: {len(row)} (unigrams{' + bigrams' if USE_BIGRAMS else ''}, min count {MIN_COUNT})")
     pred = np.array(stars)[np.argmax(nb_scores(list(test.feats), row, log_like) + log_prior, axis=1)]
     cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
     print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
