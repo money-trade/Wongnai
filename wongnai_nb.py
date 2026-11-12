@@ -41,6 +41,16 @@ def tokenize(text):
     return [t for t in toks if THAI_OR_LATIN.search(t) and t not in STOP]
 
 
+def stratified_split(labels, stars, frac, seed):
+    """Boolean mask that picks `frac` of each star at random."""
+    rng = np.random.default_rng(seed)
+    idx = np.concatenate([rng.permutation(np.where(labels == s)[0])[: int(frac * (labels == s).sum())]
+                          for s in stars])
+    mask = np.zeros(len(labels), dtype=bool)
+    mask[idx] = True
+    return mask
+
+
 def main():
     # 1) load data: no header, ';' separated, last column = star rating
     df = pd.read_csv(TRAIN, sep=";", header=None, names=["review", "rating"], engine="python")
@@ -51,13 +61,9 @@ def main():
     with Pool() as p:
         df["tokens"] = p.map(tokenize, df["review"], chunksize=200)
 
-    # 2) split 80/20 per star (own implementation), then count words in the train part only
-    rng = np.random.default_rng(42)
+    # 2) split 80/20 per star, then count words in the train part only
     ratings = df.rating.values
-    test_idx = np.concatenate([rng.permutation(np.where(ratings == s)[0])[: int(0.2 * (ratings == s).sum())]
-                               for s in stars])
-    is_test = np.zeros(len(df), dtype=bool)
-    is_test[test_idx] = True
+    is_test = stratified_split(ratings, stars, 0.2, seed=42)
     train, test = df[~is_test], df[is_test]
 
     # word table: rows = words, columns = counts per star + P(word | star) with Laplace smoothing
