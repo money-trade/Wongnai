@@ -29,6 +29,7 @@ FONT_PROP = font_manager.FontProperties(fname=FONT) if FONT else None
 # model settings (chosen on the validation split)
 ALPHA = 0.5          # Laplace smoothing
 MIN_COUNT = 5        # drop features seen fewer times than this in training
+OBJECTIVE = "macro_f1"  # what the per-star bias is tuned for: "macro_f1" or "accuracy"
 USE_BIGRAMS = True   # add word pairs such as "ไม่_อร่อย" to the model features
 
 # Stop words are removed for the word table / pictures, but sentiment-bearing ones (negation / intensity) are kept
@@ -80,12 +81,12 @@ def train_nb(token_lists, labels, stars):
 
 
 def nb_scores(token_lists, row, log_like):
-    """Sum of log P(word | star) of each review (unknown words are skipped)."""
+    """Average log P(feature | star) of each review (unknown features are skipped)."""
     out = np.zeros((len(token_lists), log_like.shape[1]))
     for i, toks in enumerate(token_lists):
         ix = [row[w] for w in toks if w in row]
         if ix:
-            out[i] = log_like[ix].sum(axis=0)
+            out[i] = log_like[ix].mean(axis=0)
     return out
 
 
@@ -99,6 +100,25 @@ def metrics(actual, pred, stars):
     recall = tp / support
     f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros(k), where=(precision + recall) > 0)
     return cm, precision, recall, f1, support, tp.sum() / cm.sum()
+
+
+def tune_bias(scores, actual, stars):
+    """Coordinate search for one bias per star (it replaces the log prior)."""
+    stars = np.array(stars)
+    def objective(b):
+        _, _, _, f1, _, acc = metrics(actual, stars[np.argmax(scores + b, axis=1)], stars)
+        return f1.mean() if OBJECTIVE == "macro_f1" else acc
+    bias = np.zeros(len(stars))
+    grid = np.linspace(-1, 1, 161)
+    for _ in range(3):
+        for k in range(len(stars)):
+            vals = []
+            for v in grid:
+                b = bias.copy()
+                b[k] = v
+                vals.append(objective(b))
+            bias[k] = grid[int(np.argmax(vals))]
+    return bias
 
 
 def main():
@@ -158,11 +178,20 @@ def main():
     fig3.tight_layout()
     fig3.savefig(os.path.join(OUT_DIR, "word_heatmap.png"), dpi=110)
 
-    # 5) Naive Bayes by hand: score(star) = log P(star) + sum of log P(word | star) over the review's words
-    row, log_like = train_nb(list(train.feats), train.rating.values, stars)
-    log_prior = np.log([(train.rating == s).mean() for s in stars])
+    # 5) Naive Bayes by hand: score(star) = average log P(feature | star) + bias(star)
+    # 5a) tune the per-star bias on a validation split taken from the train part
+    tr_labels = train.rating.values
+    is_val = stratified_split(tr_labels, stars, 0.2, seed=7)
+    tr_feats = list(train.feats)
+    row, log_like = train_nb([f for f, v in zip(tr_feats, is_val) if not v], tr_labels[~is_val], stars)
+    val_scores = nb_scores([f for f, v in zip(tr_feats, is_val) if v], row, log_like)
+    bias = tune_bias(val_scores, tr_labels[is_val], stars)
+    print(f"\nPer-star bias (tuned for {OBJECTIVE}): {np.round(bias, 3).tolist()}")
+
+    # 5b) retrain on the whole train part and evaluate on the test part
+    row, log_like = train_nb(tr_feats, tr_labels, stars)
     print(f"\nModel features: {len(row)} (unigrams{' + bigrams' if USE_BIGRAMS else ''}, min count {MIN_COUNT})")
-    pred = np.array(stars)[np.argmax(nb_scores(list(test.feats), row, log_like) + log_prior, axis=1)]
+    pred = np.array(stars)[np.argmax(nb_scores(list(test.feats), row, log_like) + bias, axis=1)]
     cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
     print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
     print(f"{'star':>8}{'precision':>11}{'recall':>9}{'f1-score':>10}{'support':>9}")
