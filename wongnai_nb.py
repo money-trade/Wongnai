@@ -16,8 +16,15 @@ from wordcloud import WordCloud
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(OUT_DIR, "review_dataset")
 TRAIN = os.environ.get("WONGNAI_TRAIN", os.path.join(DATA_DIR, "w_review_train.csv"))
-FONT = r"C:\Windows\Fonts\tahoma.ttf"  # Thai-capable font for the word cloud
-FONT_PROP = font_manager.FontProperties(fname=FONT)
+# Thai-capable font for the word cloud / heat map (first one found is used)
+FONT_CANDIDATES = [r"C:\Windows\Fonts\tahoma.ttf",
+                   "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+                   "/Library/Fonts/Thonburi.ttc",
+                   "/usr/share/fonts/opentype/tlwg/Loma.otf",
+                   "/usr/share/fonts/truetype/tlwg/Loma.ttf",
+                   "/usr/share/fonts/truetype/tlwg/Garuda.ttf"]
+FONT = os.environ.get("WONGNAI_FONT") or next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
+FONT_PROP = font_manager.FontProperties(fname=FONT) if FONT else None
 
 # Stop words are removed, but sentiment-bearing ones (negation / intensity) are kept
 KEEP = {"ไม่", "มาก", "น้อย", "สุด", "ที่สุด", "เกิน", "จริง", "เลย"}
