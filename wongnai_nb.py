@@ -51,6 +51,18 @@ def stratified_split(labels, stars, frac, seed):
     return mask
 
 
+def metrics(actual, pred, stars):
+    """Confusion matrix (rows = actual, columns = predicted) and per-star precision / recall / F1."""
+    k = len(stars)
+    cm = np.zeros((k, k), dtype=int)
+    np.add.at(cm, (np.searchsorted(stars, actual), np.searchsorted(stars, pred)), 1)
+    tp, support = np.diag(cm), cm.sum(axis=1)
+    precision = np.divide(tp, cm.sum(axis=0), out=np.zeros(k), where=cm.sum(axis=0) > 0)
+    recall = tp / support
+    f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros(k), where=(precision + recall) > 0)
+    return cm, precision, recall, f1, support, tp.sum() / cm.sum()
+
+
 def main():
     # 1) load data: no header, ';' separated, last column = star rating
     df = pd.read_csv(TRAIN, sep=";", header=None, names=["review", "rating"], engine="python")
@@ -112,18 +124,8 @@ def main():
     row = {w: i for i, w in enumerate(table.index)}  # words not in the table (OOV) are skipped
     pred = np.array([stars[np.argmax(log_prior + log_like[[row[w] for w in toks if w in row]].sum(axis=0))]
                      for toks in test.tokens])
-    actual = test.rating.values
-
-    # confusion matrix (rows = actual, columns = predicted) and metrics
-    k = len(stars)
-    cm = np.zeros((k, k), dtype=int)
-    np.add.at(cm, (np.searchsorted(stars, actual), np.searchsorted(stars, pred)), 1)
-    tp, support = np.diag(cm), cm.sum(axis=1)
-    precision = np.divide(tp, cm.sum(axis=0), out=np.zeros(k), where=cm.sum(axis=0) > 0)
-    recall = tp / support
-    f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros(k), where=(precision + recall) > 0)
-    acc = tp.sum() / cm.sum()
-    print(f"\nTest Accuracy: {acc:.4f}\n")
+    cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
+    print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
     print(f"{'star':>8}{'precision':>11}{'recall':>9}{'f1-score':>10}{'support':>9}")
     for i, s in enumerate(stars):
         print(f"{s:>8}{precision[i]:>11.2f}{recall[i]:>9.2f}{f1[i]:>10.2f}{support[i]:>9}")
@@ -137,7 +139,7 @@ def main():
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=stars, yticklabels=stars)
     plt.xlabel("Predicted star")
     plt.ylabel("Actual star")
-    plt.title(f"Confusion Matrix (accuracy {acc:.3f})")
+    plt.title(f"Confusion Matrix (accuracy {acc:.3f}, macro F1 {f1.mean():.3f})")
     fig2.tight_layout()
     fig2.savefig(os.path.join(OUT_DIR, "confusion_matrix.png"), dpi=110)
 
