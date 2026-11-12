@@ -26,7 +26,9 @@ FONT_CANDIDATES = [r"C:\Windows\Fonts\tahoma.ttf",
 FONT = os.environ.get("WONGNAI_FONT") or next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
 FONT_PROP = font_manager.FontProperties(fname=FONT) if FONT else None
 
-# Stop words are removed, but sentiment-bearing ones (negation / intensity) are kept
+USE_BIGRAMS = True  # add word pairs such as "ไม่_อร่อย" to the model features
+
+# Stop words are removed for the word table / pictures, but sentiment-bearing ones (negation / intensity) are kept
 KEEP = {"ไม่", "มาก", "น้อย", "สุด", "ที่สุด", "เกิน", "จริง", "เลย"}
 STOP = set(thai_stopwords()) - KEEP
 # extra filler words hidden from the word clouds only
@@ -37,8 +39,17 @@ THAI_OR_LATIN = re.compile(r"[\u0E00-\u0E7Fa-zA-Z0-9]")
 
 
 def tokenize(text):
+    """All Thai/Latin/digit tokens, stop words included (the model uses them)."""
     toks = word_tokenize(str(text).lower(), engine="newmm", keep_whitespace=False)
-    return [t for t in toks if THAI_OR_LATIN.search(t) and t not in STOP]
+    return [t for t in toks if THAI_OR_LATIN.search(t)]
+
+
+def features(toks):
+    """Set of unigrams + bigrams: each feature counts once per review."""
+    feats = set(toks)
+    if USE_BIGRAMS:
+        feats.update(f"{a}_{b}" for a, b in zip(toks, toks[1:]))
+    return feats
 
 
 def stratified_split(labels, stars, frac, seed):
@@ -52,7 +63,7 @@ def stratified_split(labels, stars, frac, seed):
 
 
 def train_nb(token_lists, labels, stars):
-    """Count words per star and return (word -> row, log P(word | star) matrix) with Laplace smoothing."""
+    """Count features per star and return (feature -> row, log P(feature | star) matrix)."""
     counts = {s: Counter() for s in stars}
     for toks, y in zip(token_lists, labels):
         counts[y].update(toks)
@@ -95,7 +106,9 @@ def main():
     print(f"Loaded df: {len(df)} reviews, stars = {stars}")
 
     with Pool() as p:
-        df["tokens"] = p.map(tokenize, df["review"], chunksize=200)
+        df["all_tokens"] = p.map(tokenize, df["review"], chunksize=200)
+    df["tokens"] = [[t for t in toks if t not in STOP] for toks in df.all_tokens]  # for table/pictures
+    df["feats"] = [features(toks) for toks in df.all_tokens]                         # for the model
 
     # 2) split 80/20 per star, then count words in the train part only
     ratings = df.rating.values
@@ -143,9 +156,9 @@ def main():
     fig3.savefig(os.path.join(OUT_DIR, "word_heatmap.png"), dpi=110)
 
     # 5) Naive Bayes by hand: score(star) = log P(star) + sum of log P(word | star) over the review's words
-    row, log_like = train_nb(list(train.tokens), train.rating.values, stars)
+    row, log_like = train_nb(list(train.feats), train.rating.values, stars)
     log_prior = np.log([(train.rating == s).mean() for s in stars])
-    pred = np.array(stars)[np.argmax(nb_scores(list(test.tokens), row, log_like) + log_prior, axis=1)]
+    pred = np.array(stars)[np.argmax(nb_scores(list(test.feats), row, log_like) + log_prior, axis=1)]
     cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
     print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
     print(f"{'star':>8}{'precision':>11}{'recall':>9}{'f1-score':>10}{'support':>9}")
