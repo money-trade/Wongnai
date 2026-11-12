@@ -13,8 +13,9 @@ from pythainlp.corpus import thai_stopwords
 from pythainlp.tokenize import word_tokenize
 from wordcloud import WordCloud
 
-TRAIN = r"D:\Download\review_dataset\w_review_train.csv"
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(OUT_DIR, "review_dataset")
+TRAIN = os.environ.get("WONGNAI_TRAIN", os.path.join(DATA_DIR, "w_review_train.csv"))
 FONT = r"C:\Windows\Fonts\tahoma.ttf"  # Thai-capable font for the word cloud
 FONT_PROP = font_manager.FontProperties(fname=FONT)
 
@@ -37,7 +38,7 @@ def main():
     # 1) load data: no header, ';' separated, last column = star rating
     df = pd.read_csv(TRAIN, sep=";", header=None, names=["review", "rating"], engine="python")
     df = df.dropna().astype({"rating": int})
-    stars = sorted(df.rating.unique())
+    stars = [int(s) for s in sorted(df.rating.unique())]
     print(f"Loaded df: {len(df)} reviews, stars = {stars}")
 
     with Pool() as p:
