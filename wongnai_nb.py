@@ -16,6 +16,7 @@ from wordcloud import WordCloud
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(OUT_DIR, "review_dataset")
 TRAIN = os.environ.get("WONGNAI_TRAIN", os.path.join(DATA_DIR, "w_review_train.csv"))
+TEST_FILE = os.path.join(DATA_DIR, "test_file.csv")
 # Thai-capable font for the word cloud / heat map (first one found is used)
 FONT_CANDIDATES = [r"C:\Windows\Fonts\tahoma.ttf",
                    "/System/Library/Fonts/Supplemental/Thonburi.ttc",
@@ -210,6 +211,17 @@ def main():
     plt.title(f"Confusion Matrix (accuracy {acc:.3f}, macro F1 {f1.mean():.3f})")
     fig2.tight_layout()
     fig2.savefig(os.path.join(OUT_DIR, "confusion_matrix.png"), dpi=110)
+
+    # 7) retrain on all 40,000 reviews and predict review_dataset/test_file.csv -> submission.csv
+    if os.path.exists(TEST_FILE):
+        sub = pd.read_csv(TEST_FILE, sep=";", engine="python")
+        with Pool() as p:
+            sub_feats = [features(t) for t in p.map(tokenize, sub["review"], chunksize=200)]
+        row, log_like = train_nb(list(df.feats), ratings, stars)
+        sub["rating"] = np.array(stars)[np.argmax(nb_scores(sub_feats, row, log_like) + bias, axis=1)]
+        sub[["reviewID", "rating"]].to_csv(os.path.join(OUT_DIR, "submission.csv"), index=False)
+        print(f"\nsubmission.csv: {len(sub)} predictions, "
+              f"stars = {sub.rating.value_counts().sort_index().to_dict()}")
 
     plt.show()
 
