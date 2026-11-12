@@ -51,6 +51,30 @@ def stratified_split(labels, stars, frac, seed):
     return mask
 
 
+def train_nb(token_lists, labels, stars):
+    """Count words per star and return (word -> row, log P(word | star) matrix) with Laplace smoothing."""
+    counts = {s: Counter() for s in stars}
+    for toks, y in zip(token_lists, labels):
+        counts[y].update(toks)
+    total = Counter()
+    for c in counts.values():
+        total.update(c)
+    vocab = list(total)
+    m = np.array([[counts[s][w] for s in stars] for w in vocab], dtype=float)
+    log_like = np.log((m + 1) / (m.sum(axis=0) + len(vocab)))
+    return {w: i for i, w in enumerate(vocab)}, log_like
+
+
+def nb_scores(token_lists, row, log_like):
+    """Sum of log P(word | star) of each review (unknown words are skipped)."""
+    out = np.zeros((len(token_lists), log_like.shape[1]))
+    for i, toks in enumerate(token_lists):
+        ix = [row[w] for w in toks if w in row]
+        if ix:
+            out[i] = log_like[ix].sum(axis=0)
+    return out
+
+
 def metrics(actual, pred, stars):
     """Confusion matrix (rows = actual, columns = predicted) and per-star precision / recall / F1."""
     k = len(stars)
@@ -119,11 +143,9 @@ def main():
     fig3.savefig(os.path.join(OUT_DIR, "word_heatmap.png"), dpi=110)
 
     # 5) Naive Bayes by hand: score(star) = log P(star) + sum of log P(word | star) over the review's words
-    log_like = np.log(table[[f"P(word|{s})" for s in stars]].values)  # words x stars
+    row, log_like = train_nb(list(train.tokens), train.rating.values, stars)
     log_prior = np.log([(train.rating == s).mean() for s in stars])
-    row = {w: i for i, w in enumerate(table.index)}  # words not in the table (OOV) are skipped
-    pred = np.array([stars[np.argmax(log_prior + log_like[[row[w] for w in toks if w in row]].sum(axis=0))]
-                     for toks in test.tokens])
+    pred = np.array(stars)[np.argmax(nb_scores(list(test.tokens), row, log_like) + log_prior, axis=1)]
     cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
     print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
     print(f"{'star':>8}{'precision':>11}{'recall':>9}{'f1-score':>10}{'support':>9}")
