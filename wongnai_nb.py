@@ -13,12 +13,27 @@ from pythainlp.corpus import thai_stopwords
 from pythainlp.tokenize import word_tokenize
 from wordcloud import WordCloud
 
-TRAIN = r"D:\Download\review_dataset\w_review_train.csv"
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT = r"C:\Windows\Fonts\tahoma.ttf"  # Thai-capable font for the word cloud
-FONT_PROP = font_manager.FontProperties(fname=FONT)
+DATA_DIR = os.path.join(OUT_DIR, "review_dataset")
+TRAIN = os.environ.get("WONGNAI_TRAIN", os.path.join(DATA_DIR, "w_review_train.csv"))
+TEST_FILE = os.path.join(DATA_DIR, "test_file.csv")
+# Thai-capable font for the word cloud / heat map (first one found is used)
+FONT_CANDIDATES = [r"C:\Windows\Fonts\tahoma.ttf",
+                   "/System/Library/Fonts/Supplemental/Thonburi.ttc",
+                   "/Library/Fonts/Thonburi.ttc",
+                   "/usr/share/fonts/opentype/tlwg/Loma.otf",
+                   "/usr/share/fonts/truetype/tlwg/Loma.ttf",
+                   "/usr/share/fonts/truetype/tlwg/Garuda.ttf"]
+FONT = os.environ.get("WONGNAI_FONT") or next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
+FONT_PROP = font_manager.FontProperties(fname=FONT) if FONT else None
 
-# Stop words are removed, but sentiment-bearing ones (negation / intensity) are kept
+# model settings (chosen on the validation split)
+ALPHA = 0.5          # Laplace smoothing
+MIN_COUNT = 5        # drop features seen fewer times than this in training
+OBJECTIVE = "macro_f1"  # what the per-star bias is tuned for: "macro_f1" or "accuracy"
+USE_BIGRAMS = True   # add word pairs such as "ไม่_อร่อย" to the model features
+
+# Stop words are removed for the word table / pictures, but sentiment-bearing ones (negation / intensity) are kept
 KEEP = {"ไม่", "มาก", "น้อย", "สุด", "ที่สุด", "เกิน", "จริง", "เลย"}
 STOP = set(thai_stopwords()) - KEEP
 # extra filler words hidden from the word clouds only
@@ -29,27 +44,99 @@ THAI_OR_LATIN = re.compile(r"[\u0E00-\u0E7Fa-zA-Z0-9]")
 
 
 def tokenize(text):
+    """All Thai/Latin/digit tokens, stop words included (the model uses them)."""
     toks = word_tokenize(str(text).lower(), engine="newmm", keep_whitespace=False)
-    return [t for t in toks if THAI_OR_LATIN.search(t) and t not in STOP]
+    return [t for t in toks if THAI_OR_LATIN.search(t)]
+
+
+def features(toks):
+    """Set of unigrams + bigrams: each feature counts once per review."""
+    feats = set(toks)
+    if USE_BIGRAMS:
+        feats.update(f"{a}_{b}" for a, b in zip(toks, toks[1:]))
+    return feats
+
+
+def stratified_split(labels, stars, frac, seed):
+    """Boolean mask that picks `frac` of each star at random."""
+    rng = np.random.default_rng(seed)
+    idx = np.concatenate([rng.permutation(np.where(labels == s)[0])[: int(frac * (labels == s).sum())]
+                          for s in stars])
+    mask = np.zeros(len(labels), dtype=bool)
+    mask[idx] = True
+    return mask
+
+
+def train_nb(token_lists, labels, stars):
+    """Count features per star and return (feature -> row, log P(feature | star) matrix)."""
+    counts = {s: Counter() for s in stars}
+    for toks, y in zip(token_lists, labels):
+        counts[y].update(toks)
+    total = Counter()
+    for c in counts.values():
+        total.update(c)
+    vocab = [f for f, c in total.items() if c >= MIN_COUNT]
+    m = np.array([[counts[s][w] for s in stars] for w in vocab], dtype=float)
+    log_like = np.log((m + ALPHA) / (m.sum(axis=0) + ALPHA * len(vocab)))
+    return {w: i for i, w in enumerate(vocab)}, log_like
+
+
+def nb_scores(token_lists, row, log_like):
+    """Average log P(feature | star) of each review (unknown features are skipped)."""
+    out = np.zeros((len(token_lists), log_like.shape[1]))
+    for i, toks in enumerate(token_lists):
+        ix = [row[w] for w in toks if w in row]
+        if ix:
+            out[i] = log_like[ix].mean(axis=0)
+    return out
+
+
+def metrics(actual, pred, stars):
+    """Confusion matrix (rows = actual, columns = predicted) and per-star precision / recall / F1."""
+    k = len(stars)
+    cm = np.zeros((k, k), dtype=int)
+    np.add.at(cm, (np.searchsorted(stars, actual), np.searchsorted(stars, pred)), 1)
+    tp, support = np.diag(cm), cm.sum(axis=1)
+    precision = np.divide(tp, cm.sum(axis=0), out=np.zeros(k), where=cm.sum(axis=0) > 0)
+    recall = tp / support
+    f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros(k), where=(precision + recall) > 0)
+    return cm, precision, recall, f1, support, tp.sum() / cm.sum()
+
+
+def tune_bias(scores, actual, stars):
+    """Coordinate search for one bias per star (it replaces the log prior)."""
+    stars = np.array(stars)
+    def objective(b):
+        _, _, _, f1, _, acc = metrics(actual, stars[np.argmax(scores + b, axis=1)], stars)
+        return f1.mean() if OBJECTIVE == "macro_f1" else acc
+    bias = np.zeros(len(stars))
+    grid = np.linspace(-1, 1, 161)
+    for _ in range(3):
+        for k in range(len(stars)):
+            vals = []
+            for v in grid:
+                b = bias.copy()
+                b[k] = v
+                vals.append(objective(b))
+            bias[k] = grid[int(np.argmax(vals))]
+    return bias
 
 
 def main():
     # 1) load data: no header, ';' separated, last column = star rating
     df = pd.read_csv(TRAIN, sep=";", header=None, names=["review", "rating"], engine="python")
     df = df.dropna().astype({"rating": int})
-    stars = sorted(df.rating.unique())
+    stars = [int(s) for s in sorted(df.rating.unique())]
     print(f"Loaded df: {len(df)} reviews, stars = {stars}")
 
     with Pool() as p:
-        df["tokens"] = p.map(tokenize, df["review"], chunksize=200)
+        df["all_tokens"] = p.map(tokenize, df["review"], chunksize=200)
+    df["tokens"] = [[t for t in toks if t not in STOP] for toks in df.all_tokens]  # for table/pictures
+    df["feats"] = [features(toks) for toks in df.all_tokens]                         # for the model
 
-    # 2) split 80/20 per star (own implementation), then count words in the train part only
-    rng = np.random.default_rng(42)
+    # 2) split 80/20 per star, then count words in the train part only
     ratings = df.rating.values
-    test_idx = np.concatenate([rng.permutation(np.where(ratings == s)[0])[: int(0.2 * (ratings == s).sum())]
-                               for s in stars])
-    is_test = np.zeros(len(df), dtype=bool)
-    is_test[test_idx] = True
+    is_test = stratified_split(ratings, stars, 0.2, seed=42)
     train, test = df[~is_test], df[is_test]
 
     # word table: rows = words, columns = counts per star + P(word | star) with Laplace smoothing
@@ -92,24 +179,22 @@ def main():
     fig3.tight_layout()
     fig3.savefig(os.path.join(OUT_DIR, "word_heatmap.png"), dpi=110)
 
-    # 5) Naive Bayes by hand: score(star) = log P(star) + sum of log P(word | star) over the review's words
-    log_like = np.log(table[[f"P(word|{s})" for s in stars]].values)  # words x stars
-    log_prior = np.log([(train.rating == s).mean() for s in stars])
-    row = {w: i for i, w in enumerate(table.index)}  # words not in the table (OOV) are skipped
-    pred = np.array([stars[np.argmax(log_prior + log_like[[row[w] for w in toks if w in row]].sum(axis=0))]
-                     for toks in test.tokens])
-    actual = test.rating.values
+    # 5) Naive Bayes by hand: score(star) = average log P(feature | star) + bias(star)
+    # 5a) tune the per-star bias on a validation split taken from the train part
+    tr_labels = train.rating.values
+    is_val = stratified_split(tr_labels, stars, 0.2, seed=7)
+    tr_feats = list(train.feats)
+    row, log_like = train_nb([f for f, v in zip(tr_feats, is_val) if not v], tr_labels[~is_val], stars)
+    val_scores = nb_scores([f for f, v in zip(tr_feats, is_val) if v], row, log_like)
+    bias = tune_bias(val_scores, tr_labels[is_val], stars)
+    print(f"\nPer-star bias (tuned for {OBJECTIVE}): {np.round(bias, 3).tolist()}")
 
-    # confusion matrix (rows = actual, columns = predicted) and metrics
-    k = len(stars)
-    cm = np.zeros((k, k), dtype=int)
-    np.add.at(cm, (np.searchsorted(stars, actual), np.searchsorted(stars, pred)), 1)
-    tp, support = np.diag(cm), cm.sum(axis=1)
-    precision = np.divide(tp, cm.sum(axis=0), out=np.zeros(k), where=cm.sum(axis=0) > 0)
-    recall = tp / support
-    f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros(k), where=(precision + recall) > 0)
-    acc = tp.sum() / cm.sum()
-    print(f"\nTest Accuracy: {acc:.4f}\n")
+    # 5b) retrain on the whole train part and evaluate on the test part
+    row, log_like = train_nb(tr_feats, tr_labels, stars)
+    print(f"\nModel features: {len(row)} (unigrams{' + bigrams' if USE_BIGRAMS else ''}, min count {MIN_COUNT})")
+    pred = np.array(stars)[np.argmax(nb_scores(list(test.feats), row, log_like) + bias, axis=1)]
+    cm, precision, recall, f1, support, acc = metrics(test.rating.values, pred, stars)
+    print(f"\nTest Accuracy: {acc:.4f}   Macro F1: {f1.mean():.4f}\n")
     print(f"{'star':>8}{'precision':>11}{'recall':>9}{'f1-score':>10}{'support':>9}")
     for i, s in enumerate(stars):
         print(f"{s:>8}{precision[i]:>11.2f}{recall[i]:>9.2f}{f1[i]:>10.2f}{support[i]:>9}")
@@ -123,9 +208,20 @@ def main():
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=stars, yticklabels=stars)
     plt.xlabel("Predicted star")
     plt.ylabel("Actual star")
-    plt.title(f"Confusion Matrix (accuracy {acc:.3f})")
+    plt.title(f"Confusion Matrix (accuracy {acc:.3f}, macro F1 {f1.mean():.3f})")
     fig2.tight_layout()
     fig2.savefig(os.path.join(OUT_DIR, "confusion_matrix.png"), dpi=110)
+
+    # 7) retrain on all 40,000 reviews and predict review_dataset/test_file.csv -> submission.csv
+    if os.path.exists(TEST_FILE):
+        sub = pd.read_csv(TEST_FILE, sep=";", engine="python")
+        with Pool() as p:
+            sub_feats = [features(t) for t in p.map(tokenize, sub["review"], chunksize=200)]
+        row, log_like = train_nb(list(df.feats), ratings, stars)
+        sub["rating"] = np.array(stars)[np.argmax(nb_scores(sub_feats, row, log_like) + bias, axis=1)]
+        sub[["reviewID", "rating"]].to_csv(os.path.join(OUT_DIR, "submission.csv"), index=False)
+        print(f"\nsubmission.csv: {len(sub)} predictions, "
+              f"stars = {sub.rating.value_counts().sort_index().to_dict()}")
 
     plt.show()
 
